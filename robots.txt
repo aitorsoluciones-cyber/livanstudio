@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /gracias.html
+Disallow: /offline.html
+Sitemap: https://livanstudio.com/sitemap.xml

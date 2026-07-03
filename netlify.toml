@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[context.deploy-preview]
+  command = ""
+
+[context.branch-deploy]
+  command = ""
