@@ -18,7 +18,7 @@
   6. Sube también `version` para saber qué tarifa se está sirviendo.
 */
 window.LIVAN_PRICING = {
-  version: 'V1-provisional',
+  version: 'V1-provisional.2',
   status: 'fixed_provisional',
   currency: 'EUR',
   priceNote: 'Precio con IVA incluido · Envío aparte',
@@ -31,10 +31,12 @@ window.LIVAN_PRICING = {
   // A partir de esta cantidad el pedido se marca "a revisar".
   volumeFrom: 100,
   maxQuantity: 1000,
-  // 'line'    -> el tramo depende de la cantidad de cada línea (por defecto).
-  // 'variant' -> el tramo suma las cantidades de todas las líneas con la
-  //              misma variante de precio (p. ej. mismo tamaño de estampado).
-  tierScope: 'line',
+  // 'variant' -> el tramo suma las cantidades de todas las líneas con la misma
+  //              variante de precio (mismo producto, técnica y posición/tamaño;
+  //              la talla, el color y los extras no cambian la variante).
+  //              Decisión comercial vigente: 5 M + 2 L frontal A4 = 7 uds, tramo de 5.
+  // 'line'    -> el tramo depende solo de la cantidad de cada línea.
+  tierScope: 'variant',
 
   shipping: {
     recogida: { label: 'Recogida en Rubí', mode: 'fixed', byKind: { textil: 0, fragil: 0 }, needsAddress: false },
