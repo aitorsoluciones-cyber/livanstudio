@@ -6,27 +6,28 @@
 
   ESTADOS DE PRECIO (campo `status` de cada producto)
   - fixed_provisional : precio automático por tramos (tarifa provisional V1).
-  - estimated         : precio orientativo; se confirma antes de producir.
+  - estimated         : precio orientativo; se confirma tras revisar el pedido.
   - quote_required    : a presupuesto, sin precio en la web.
-  Si un producto tiene `status` fixed_provisional o estimated pero sus
-  variantes tienen `prices: null`, la web lo trata como "a presupuestar"
-  hasta que se rellene la tarifa. No se muestra ningún precio inventado.
+  Una variante con `prices: null` (o un tramo con valor `null`) se trata como
+  "a presupuestar". No se muestra ningún precio que no esté en esta tarifa.
 
   CÓMO ACTUALIZAR PRECIOS
   1. Todos los importes están en CÉNTIMOS de euro (17,90 € = 1790).
   2. Cada variante tiene `prices`: un importe por tramo, en el mismo orden
-     que `tiers` (1, 5, 10, 25, 50, 100 unidades). `prices: null` = pendiente.
-  3. Los suplementos (`extras`) son importes por unidad, también en céntimos.
+     que `tiers` (1, 5, 10, 25, 50, 100 unidades). `null` = a presupuestar.
+  3. Los suplementos (`extras`) tienen `perUnit` (por unidad) y, opcionalmente,
+     `fixed` (pago único por línea), también en céntimos.
   4. Los envíos están en `shipping`: `byKind` por tipo de producto
      (textil / fragil). `mode: 'quote'` significa "a presupuestar".
      En un pedido mixto se aplica el envío más alto de los tipos presentes.
   5. Tramos (`tierScope: 'variant'`): se suman las cantidades de las líneas con
-     el mismo PRODUCTO y la misma VARIANTE DE PRECIO (`variantField`). Nunca se
-     mezclan productos distintos ni variantes distintas.
+     el mismo PRODUCTO y la misma VARIANTE DE PRECIO (`variantField`, o la
+     combinación de `variantFields`). Nunca se mezclan productos distintos ni
+     variantes distintas.
   6. IMPORTANTE: /assets/* se sirve con caché inmutable de un año. Tras editar
      este archivo hay que cambiar el valor de `?v=` en los <script> de
      pricing.js y order-builder.js en camisetas-personalizadas.html,
-     tazas-personalizadas.html y pedidos.html (por ejemplo ?v=v2-2).
+     tazas-personalizadas.html y pedidos.html (por ejemplo ?v=v2-3).
   7. Sube también `version` para saber qué tarifa se está sirviendo.
 */
 (function () {
@@ -46,7 +47,6 @@
     { value: 'frontal', label: 'Frontal ≤A4', msgLabel: 'Frontal ≤A4' },
     { value: 'grande', label: 'Grande ≤A3', msgLabel: 'Grande ≤A3' }
   ];
-  var POSITIONS_2 = POSITIONS_3.slice(0, 2);
   var FILE_GENERIC = [
     { value: 'listo', label: 'Tengo archivo listo', msgText: 'Tengo archivo listo y lo enviaré por WhatsApp.' },
     { value: 'logo-ayuda', label: 'Tengo logo pero necesito ayuda', msgText: 'Tengo un logo pero necesito ayuda para prepararlo; lo enviaré por WhatsApp.' },
@@ -60,22 +60,30 @@
     { value: 'idea', label: 'Tengo una idea', msgText: 'Solo tengo una idea y necesito orientación con el diseño.' },
     { value: 'repetir', label: 'Repetir diseño anterior', msgText: 'Quiero repetir un diseño anterior.' }
   ];
-  // Suplementos por unidad de la tarifa V1 (céntimos).
-  var EXTRAS_NAMES = [
-    { value: 'ninguno', label: 'Ninguno', perUnit: 0 },
-    { value: 'nombre', label: 'Nombre individual DTF', perUnit: 290 },
-    { value: 'dorsal', label: 'Dorsal individual', perUnit: 390 },
-    { value: 'nombre-dorsal', label: 'Nombre + dorsal', perUnit: 590 }
-  ];
   function pending(label) { return { label: label, prices: null }; }
 
+  // Tarifa de bordado (suplementos, en céntimos). Los bordados grandes o
+  // complejos NO se automatizan: se piden como "Bordados grandes" (a presupuesto).
+  var EMBROIDERY = {
+    nameSmall: 490,       // nombre / texto pequeño
+    logoSmall: 690,       // logo pequeño ≈ ≤8.000 puntadas
+    digitizing: 3000,     // digitalización del logo, primera vez (pago único)
+    digitizedBefore: 0    // logo ya digitalizado en un pedido anterior
+  };
+
+  // Gorras: precio de referencia DTF frontal (orientativo).
+  var CAP_DTF_PRICES = [1590, 1390, 1190, 1090, 990, 890];
+
   window.LIVAN_PRICING = {
-    version: 'V1-provisional.3',
+    version: 'V1-provisional.4',
     status: 'fixed_provisional',
     currency: 'EUR',
     priceNote: 'Precio con IVA incluido · Envío aparte',
     reviewNote: 'El pedido se revisará antes de producir para confirmar archivo, disponibilidad y envío.',
     volumeNote: 'Pedido de volumen: revisaremos precio final antes de producir.',
+    // Aviso de los productos con precio orientativo (estimated).
+    estimateNote: 'Precio orientativo. Te confirmaremos el importe final tras revisar producto, archivo, cantidad y disponibilidad.',
+    estimateTotalNote: 'El total incluye precios orientativos. Te confirmaremos el importe final tras revisar producto, archivo, cantidad y disponibilidad.',
     whatsappNumber: '34692899784',
 
     // Tramos por cantidad. Se usa el tramo más cercano hacia abajo.
@@ -84,8 +92,8 @@
     volumeFrom: 100,
     maxQuantity: 1000,
     // 'variant' -> el tramo suma las cantidades de todas las líneas con el mismo
-    //              producto y la misma variante de precio (`variantField`); la
-    //              talla, el color y los extras no cambian la variante.
+    //              producto y la misma variante de precio; la talla, el color y
+    //              los extras no cambian la variante.
     //              Decisión comercial vigente: 5 M + 2 L frontal A4 = 7 uds, tramo de 5.
     // 'line'    -> el tramo depende solo de la cantidad de cada línea.
     tierScope: 'variant',
@@ -111,9 +119,12 @@
       quote_required: 'A presupuesto'
     },
 
+    // Bordado: suplementos de referencia (los usan los productos bordados).
+    embroidery: EMBROIDERY,
+
     // El orden de las claves es el orden del catálogo (selector, resumen y mensaje).
     products: {
-      /* ================= MVP 1: precio automático (tarifa V1) ================= */
+      /* ================= Precio automático (tarifa V1) ================= */
       camisetas: {
         label: 'Camisetas personalizadas',
         status: 'fixed_provisional',
@@ -179,26 +190,34 @@
         file: { label: 'Archivo / diseño', options: FILE_MUG }
       },
 
-      /* ===== MVP 2: precio automático, TARIFA PENDIENTE (prices: null => a presupuestar) ===== */
       'tote-bags': {
         label: 'Tote bags personalizadas',
         status: 'fixed_provisional',
         itemSingular: 'tote bag',
         itemPlural: 'tote bags',
         shippingKind: 'textil',
-        variantField: 'position',
-        lineOrder: ['color', 'technique', 'position'],
+        variantField: 'design',
+        lineOrder: ['type', 'color', 'technique', 'design'],
+        info: 'Tote bag de algodón (140 g aprox.) con DTF en una cara. La segunda cara se presupuesta.',
         fields: [
-          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'tote', label: 'Tote bag de tela' }] },
+          { id: 'type', label: 'Tipo', options: [{ value: 'tote-140', label: 'Tote bag de algodón (140 g aprox.)', msgLabel: 'Tote bag 140 g aprox.' }] },
           { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
-          { id: 'position', label: 'Tamaño del diseño', options: POSITIONS_3 },
+          {
+            id: 'design', label: 'Caras personalizadas',
+            options: [
+              { value: 'una-cara', label: 'Una cara (frontal)', msgLabel: 'Una cara' },
+              { value: 'dos-caras', label: 'Dos caras · a presupuesto', msgLabel: 'Dos caras' }
+            ]
+          },
           {
             id: 'color', label: 'Color de la bolsa', msgPrefix: 'Color ', msgLower: true,
             options: [{ value: 'natural', label: 'Natural' }, { value: 'negro', label: 'Negro' }, { value: 'otro', label: 'Otro / consultar' }]
           }
         ],
-        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
-        variants: { pecho: pending('Tote bag · DTF ≤10×10'), frontal: pending('Tote bag · DTF ≤A4'), grande: pending('Tote bag · DTF ≤A3') },
+        variants: {
+          'una-cara': { label: 'Tote 140 g aprox. · DTF 1 cara', prices: [1190, 1090, 990, 890, 790, 690] },
+          'dos-caras': pending('Tote · DTF 2 caras')
+        },
         extras: null,
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
@@ -211,15 +230,24 @@
         shippingKind: 'textil',
         variantField: 'position',
         lineOrder: ['size', 'color', 'technique', 'position'],
+        info: 'Precio automático solo para logo en pecho. Otras posiciones se presupuestan.',
         fields: [
           { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'adulto', label: 'Polo adulto' }] },
           { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
-          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_2 },
+          {
+            id: 'position', label: 'Posición y tamaño del diseño',
+            options: [
+              { value: 'pecho', label: 'Logo en pecho (pequeño ≤10×10 cm)', msgLabel: 'Logo pecho' },
+              { value: 'frontal', label: 'Frontal ≤A4 · a presupuesto', msgLabel: 'Frontal ≤A4' }
+            ]
+          },
           { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
           { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
         ],
-        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
-        variants: { pecho: pending('Polo adulto · DTF pecho ≤10×10'), frontal: pending('Polo adulto · DTF frontal ≤A4') },
+        variants: {
+          pecho: { label: 'Polo · DTF logo pecho', prices: [2490, 2290, 2090, 1890, 1790, 1690] },
+          frontal: pending('Polo · DTF frontal ≤A4')
+        },
         extras: null,
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
@@ -230,26 +258,40 @@
         itemSingular: 'sudadera',
         itemPlural: 'sudaderas',
         shippingKind: 'textil',
-        variantField: 'position',
+        // El precio depende del tipo de sudadera Y de la posición: variante compuesta.
+        variantFields: ['type', 'position'],
         lineOrder: ['type', 'size', 'color', 'technique', 'position'],
+        info: 'El precio depende del tipo de sudadera. Precio automático solo para logo en pecho; otras posiciones se presupuestan.',
         fields: [
           {
-            // Si el precio depende del tipo, hay que convertir la variante en clave compuesta.
             id: 'type', label: 'Tipo',
-            options: [{ value: 'capucha', label: 'Sudadera con capucha' }, { value: 'redonda', label: 'Sudadera cuello redondo' }]
+            options: [{ value: 'redonda', label: 'Sudadera cuello redondo' }, { value: 'capucha', label: 'Sudadera con capucha' }]
           },
           { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
-          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_3 },
+          {
+            id: 'position', label: 'Posición y tamaño del diseño',
+            options: [
+              { value: 'pecho', label: 'Logo en pecho (pequeño ≤10×10 cm)', msgLabel: 'Logo pecho' },
+              { value: 'frontal', label: 'Frontal ≤A4 · a presupuesto', msgLabel: 'Frontal ≤A4' },
+              { value: 'grande', label: 'Grande ≤A3 · a presupuesto', msgLabel: 'Grande ≤A3' }
+            ]
+          },
           { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
           { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
         ],
-        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
-        variants: { pecho: pending('Sudadera · DTF pecho ≤10×10'), frontal: pending('Sudadera · DTF frontal ≤A4'), grande: pending('Sudadera · DTF grande ≤A3') },
+        variants: {
+          'redonda|pecho': { label: 'Sudadera cuello redondo · DTF pecho', prices: [3490, 3290, 2990, 2790, 2590, 2490] },
+          'capucha|pecho': { label: 'Sudadera capucha · DTF pecho', prices: [3990, 3790, 3490, 3290, 3090, 2990] },
+          'redonda|frontal': pending('Sudadera cuello redondo · DTF frontal ≤A4'),
+          'capucha|frontal': pending('Sudadera capucha · DTF frontal ≤A4'),
+          'redonda|grande': pending('Sudadera cuello redondo · DTF grande ≤A3'),
+          'capucha|grande': pending('Sudadera capucha · DTF grande ≤A3')
+        },
         extras: null,
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
 
-      /* ===== MVP 2: precio orientativo, TARIFA PENDIENTE (prices: null => a presupuestar) ===== */
+      /* ================= Precio orientativo (estimated) ================= */
       'gorras-dtf': {
         label: 'Gorras personalizadas (DTF)',
         status: 'estimated',
@@ -257,14 +299,15 @@
         itemPlural: 'gorras',
         shippingKind: 'textil',
         variantField: 'technique',
-        lineOrder: ['color', 'technique'],
+        lineOrder: ['type', 'color', 'technique', 'position'],
+        estimateNote: 'Precio orientativo. Revisaremos el modelo de gorra y el archivo antes de producir.',
         fields: [
           { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'gorra', label: 'Gorra' }] },
           { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Posición', options: [{ value: 'frontal', label: 'Frontal', msgLabel: 'Frontal' }] },
           { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
         ],
-        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
-        variants: { dtf: pending('Gorra · DTF') },
+        variants: { dtf: { label: 'Gorra · DTF frontal', prices: CAP_DTF_PRICES } },
         extras: null,
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
@@ -276,16 +319,25 @@
         itemPlural: 'gorras',
         shippingKind: 'textil',
         variantField: 'technique',
-        lineOrder: ['color', 'technique'],
+        lineOrder: ['type', 'color', 'technique'],
+        estimateNote: 'Precio orientativo de bordado: revisaremos el modelo de gorra, el logo y las puntadas antes de producir.',
+        info: 'Precio orientativo: incluye la gorra y el bordado de un logo o texto pequeño. La digitalización del logo (30,00 €, pago único) solo se cobra la primera vez. Para logos grandes o complejos usa «Bordados grandes» (a presupuesto).',
         fields: [
           { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'gorra', label: 'Gorra' }] },
-          { id: 'technique', label: 'Técnica', options: [{ value: 'bordado', label: 'Bordado (logo frontal estándar)', msgLabel: 'Bordado' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'bordado', label: 'Bordado' }] },
           { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
         ],
-        // Los bordados grandes se piden como "Bordados grandes" (a presupuesto).
-        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
-        variants: { bordado: pending('Gorra · bordado') },
-        extras: null,
+        // Base de referencia = tabla de gorra DTF frontal; el bordado va como suplemento (extras).
+        variants: { bordado: { label: 'Gorra · bordado logo pequeño (base de referencia)', prices: CAP_DTF_PRICES } },
+        extras: {
+          label: 'Bordado',
+          required: true,
+          options: [
+            { value: 'logo-nuevo', label: 'Logo pequeño ≤8.000 puntadas · primera vez', perUnit: EMBROIDERY.logoSmall, fixed: EMBROIDERY.digitizing },
+            { value: 'logo-digitalizado', label: 'Logo pequeño ≤8.000 puntadas · ya digitalizado', perUnit: EMBROIDERY.logoSmall, fixed: EMBROIDERY.digitizedBefore },
+            { value: 'nombre-texto', label: 'Nombre / texto pequeño', perUnit: EMBROIDERY.nameSmall, fixed: 0 }
+          ]
+        },
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
 
@@ -297,7 +349,7 @@
         shippingKind: 'fragil',
         variantField: 'type',
         fields: [
-          { id: 'type', label: 'Tipo', options: [{ value: 'sublimable', label: 'Termo sublimable' }] },
+          { id: 'type', label: 'Tipo', options: [{ value: 'sublimable-500', label: 'Termo sublimable 500 ml' }] },
           { id: 'technique', label: 'Técnica', options: [{ value: 'sublimacion', label: 'Sublimación' }] },
           {
             id: 'design', label: 'Diseño',
@@ -307,8 +359,7 @@
             ]
           }
         ],
-        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
-        variants: { sublimable: pending('Termo sublimable · sublimación') },
+        variants: { 'sublimable-500': { label: 'Termo sublimable 500 ml', prices: [1990, 1890, 1690, 1490, 1390, 1290] } },
         extras: null,
         file: { label: 'Archivo / diseño', options: FILE_MUG }
       },
@@ -319,23 +370,39 @@
         itemSingular: 'equipación',
         itemPlural: 'equipaciones',
         shippingKind: 'textil',
-        variantField: 'position',
-        lineOrder: ['size', 'color', 'technique', 'position'],
+        variantField: 'type',
+        lineOrder: ['type', 'size', 'color', 'technique'],
+        info: 'Incluye camiseta, short, escudo, nombre y dorsal en DTF. Segundo pantalón y medias: a presupuestar (indícalo en los comentarios). A partir de 100 unidades se presupuesta.',
         fields: [
-          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'equipacion', label: 'Camiseta de equipación' }] },
+          {
+            id: 'type', label: 'Tipo',
+            options: [{ value: 'tecnica', label: 'Equipación técnica: camiseta + short + escudo + nombre + dorsal', msgLabel: 'Equipación técnica (camiseta + short + escudo + nombre + dorsal)' }]
+          },
           { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
-          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_3 },
           { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
           { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
         ],
-        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
-        variants: { pecho: pending('Equipación · DTF ≤10×10'), frontal: pending('Equipación · DTF ≤A4'), grande: pending('Equipación · DTF ≤A3') },
-        // Mismos suplementos por unidad que camisetas (tarifa V1): nombre, dorsal, nombre + dorsal.
-        extras: { label: 'Extras', options: EXTRAS_NAMES },
+        // 100 unidades: a presupuestar (valor null).
+        variants: { tecnica: { label: 'Equipación técnica DTF', prices: [3990, 3490, 3190, 2990, 2790, null] } },
+        // Patrocinadores (por unidad, en céntimos).
+        extras: {
+          label: 'Sponsors',
+          options: [
+            { value: 'ninguno', label: 'Sin sponsor', perUnit: 0 },
+            { value: 'frontal', label: 'Sponsor frontal', perUnit: 350 },
+            { value: 'espalda', label: 'Sponsor espalda', perUnit: 350 },
+            { value: 'manga', label: 'Sponsor manga', perUnit: 290 },
+            { value: 'frontal-espalda', label: 'Sponsor frontal + espalda', perUnit: 700 },
+            { value: 'frontal-manga', label: 'Sponsor frontal + manga', perUnit: 640 },
+            { value: 'espalda-manga', label: 'Sponsor espalda + manga', perUnit: 640 },
+            { value: 'frontal-espalda-manga', label: 'Sponsor frontal + espalda + manga', perUnit: 990 }
+          ]
+        },
+        detail: { label: 'Nombres, dorsales y escudo', placeholder: 'Por ejemplo: lista de nombres y dorsales, color del equipo, escudo…' },
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
 
-      /* ===== MVP 2: a presupuesto (sin precio en la web) ===== */
+      /* ================= A presupuesto (sin precio en la web) ================= */
       'uniformes-complejos': {
         label: 'Uniformes complejos',
         status: 'quote_required',

@@ -54,7 +54,11 @@
     return idx;
   }
 
-  function variantKeyOf(prod, values) { return prod.variantField ? (values[prod.variantField] || '') : 'default'; }
+  // Clave de variante de precio: un campo (variantField), varios (variantFields, p. ej. tipo + posición) o ninguno.
+  function variantKeyOf(prod, values) {
+    if (prod.variantFields) return prod.variantFields.map(function (f) { return values[f] || ''; }).join('|');
+    return prod.variantField ? (values[prod.variantField] || '') : 'default';
+  }
   function variantOf(prod, values) { return prod.variants ? (prod.variants[variantKeyOf(prod, values)] || null) : null; }
   function hasPrices(variant) {
     return !!(variant && variant.prices && variant.prices.length === pricing().tiers.length);
@@ -118,6 +122,7 @@
       pricedCount: 0, quoteCount: 0, hasEstimated: false, hasQuote: false, shippingReview: false
     };
     var kinds = [];
+    var fixedCharged = {};
     lines.forEach(function (l, i) {
       var m = meta[i], prod = m.prod;
       var kind = prod.shippingKind || 'textil';
@@ -133,10 +138,25 @@
       var tierQty = P.tierScope === 'variant' ? agg[m.tk] : l.qty;
       var ti = tierIndex(tierQty);
       var unit = m.variant.prices[ti];
+      if (unit == null) {
+        // Tramo sin precio (p. ej. 100+ unidades): la línea se presupuesta.
+        out.hasQuote = true; out.quoteCount++;
+        out.lines.push({
+          product: l.product, status: 'quote_required', priced: false, estimated: false, volumeQuote: true, qty: l.qty,
+          tier: P.tiers[ti], unitCents: null, lineCents: null, extraLabel: '', extraUnitCents: 0, volume: true
+        });
+        return;
+      }
       var extra = prod.extras ? findOption(prod.extras.options, l.values.extras) : null;
       var extraUnit = extra ? extra.perUnit : 0;
+      var extraFixed = 0;
+      if (extra && extra.fixed) {
+        // Pago único (p. ej. digitalización del logo): una sola vez por producto y opción.
+        var fk = l.product + '|' + extra.value;
+        if (!fixedCharged[fk]) { fixedCharged[fk] = true; extraFixed = extra.fixed; }
+      }
       var isVolume = tierQty >= P.volumeFrom;
-      var lineCents = (unit + extraUnit) * l.qty;
+      var lineCents = (unit + extraUnit) * l.qty + extraFixed;
       var estimated = m.status === 'estimated';
       out.productsCents += lineCents;
       out.pricedCount++;
@@ -145,7 +165,7 @@
       out.lines.push({
         product: l.product, status: m.status, priced: true, estimated: estimated, qty: l.qty,
         tier: P.tiers[ti], unitCents: unit,
-        extraLabel: extra && extraUnit > 0 ? extra.label : '', extraUnitCents: extraUnit,
+        extraLabel: extra && (extraUnit > 0 || extraFixed > 0) ? extra.label : '', extraUnitCents: extraUnit, extraFixedCents: extraFixed,
         lineCents: lineCents, volume: isVolume
       });
     });
@@ -188,6 +208,13 @@
       parts.push((f.msgPrefix || '') + text);
     });
     return parts.join(' · ');
+  }
+
+  // "+3,50 €/ud", "+6,90 €/ud + 30,00 € (pago único)"
+  function extraPriceText(perUnit, fixed) {
+    var t = perUnit > 0 ? '+' + money(perUnit) + '/ud' : '';
+    if (fixed > 0) t += (t ? ' + ' : '+') + money(fixed) + ' (pago único)';
+    return t;
   }
 
   function unitsText(qty) { return qty + (qty === 1 ? ' unidad' : ' unidades'); }
@@ -276,14 +303,15 @@
       L.push((i + 1) + ') ' + unitsText(r.qty) + (desc ? ' · ' + desc : ''));
       if (r.status === 'quote_required') {
         L.push('Precio: a presupuestar');
-        var detail = oneLine(line.values.detail, 300);
-        if (detail) L.push('Detalle: ' + detail);
+        if (r.volumeQuote) L.push('Pedido de volumen: precio a presupuestar.');
       } else {
         L.push((r.estimated ? 'Precio unitario orientativo: ' : 'Precio unitario: ') + money(r.unitCents));
-        if (r.extraLabel) L.push('Suplemento: ' + r.extraLabel + ' · +' + money(r.extraUnitCents) + '/ud');
+        if (r.extraLabel) L.push('Suplemento: ' + r.extraLabel + ' · ' + extraPriceText(r.extraUnitCents, r.extraFixedCents));
         L.push((r.estimated ? 'Subtotal línea orientativo: ' : 'Subtotal línea: ') + money(r.lineCents));
         if (r.volume) L.push('Pedido de volumen: precio final a revisar.');
       }
+      var detail = oneLine(line.values.detail, 300);
+      if (detail) L.push('Detalle: ' + detail);
       L.push('');
     });
 
@@ -291,7 +319,17 @@
     L.push('Envío estimado: ' + (calc.shippingQuote ? 'a presupuestar' : money(calc.shippingCents)));
     L.push('Total estimado: ' + totalMessageText(calc));
     L.push('Precios con IVA incluido. Envío aparte.');
-    if (calc.hasEstimated) L.push('Incluye precios orientativos: se confirmarán antes de producir.');
+    if (calc.hasEstimated) {
+      L.push('Incluye precios orientativos. Te confirmaremos el importe final tras revisar producto, archivo, cantidad y disponibilidad.');
+      var noted = [];
+      lines.forEach(function (line, i) {
+        var pr = P.products[line.product];
+        if (calc.lines[i].estimated && pr.estimateNote && noted.indexOf(line.product) < 0) {
+          noted.push(line.product);
+          L.push(pr.label + ': ' + pr.estimateNote);
+        }
+      });
+    }
     if (calc.hasQuote) L.push('Líneas a presupuestar: ' + calc.quoteCount + ' (sin precio en el total).');
     if (calc.shippingReview) L.push('El envío se revisará según el pedido final.');
     if (calc.volume) L.push(P.volumeNote);
@@ -332,7 +370,7 @@
   var core = {
     money: money, tierIndex: tierIndex, calcOrder: calcOrder, calcMixed: calcMixed, validate: validate,
     buildMessage: buildMessage, whatsappUrl: whatsappUrl, lineDescription: lineDescription,
-    productStatus: productStatus, orderLines: orderLines
+    productStatus: productStatus, orderLines: orderLines, variantKeyOf: variantKeyOf
   };
   root.LivanOrder = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
@@ -400,9 +438,16 @@
       prod.fields.forEach(function (f) {
         configFields.appendChild(selectField(f.id, f.label, f.options, { placeholder: f.options.length > 1 }));
       });
-      if (prod.extras) configFields.appendChild(selectField('extras', prod.extras.label + ' (por unidad)', prod.extras.options.map(function (o) {
-        return { value: o.value, label: o.perUnit ? o.label + ' · +' + moneyUI(o.perUnit) : o.label };
-      })));
+      if (prod.extras) {
+        // Si hay suplementos de pago único, el precio por unidad se marca con "/ud".
+        var hasFixed = prod.extras.options.some(function (o) { return o.fixed; });
+        configFields.appendChild(selectField('extras', prod.extras.label + (hasFixed ? '' : ' (por unidad)'), prod.extras.options.map(function (o) {
+          var t = o.label;
+          if (o.perUnit) t += ' · +' + moneyUI(o.perUnit) + (hasFixed ? '/ud' : '');
+          if (o.fixed) t += ' + ' + moneyUI(o.fixed) + ' (pago único)';
+          return { value: o.value, label: t };
+        }), { placeholder: !!prod.extras.required }));
+      }
       if (prod.detail) {
         var ta = h('textarea', { id: uid + 'detail', name: 'detail', rows: '3', maxlength: '300', placeholder: prod.detail.placeholder || '', autocomplete: 'off', 'aria-describedby': uid + 'detail-err' });
         cur.ctl.detail = ta;
@@ -584,6 +629,12 @@
     function badge(status) { return h('span', { class: 'ls-badge ls-badge-' + status, text: P.statusLabels[status] }); }
 
     function renderPrice() {
+      renderPriceInner();
+      var pr = curProd();
+      if (pr && pr.info) els.pricePanel.appendChild(h('p', { class: 'ls-price-sub', text: pr.info }));
+    }
+
+    function renderPriceInner() {
       var prod = curProd();
       els.pricePanel.textContent = '';
       els.tiers.textContent = '';
@@ -602,6 +653,10 @@
         els.pricePanel.appendChild(h('p', { class: 'ls-price-hint', text: 'Elige la configuración para ver el precio.' }));
         return;
       }
+      if (prod.extras && prod.extras.required && !cfg.values.extras) {
+        els.pricePanel.appendChild(h('p', { class: 'ls-price-hint', text: 'Elige el tipo de bordado para ver el precio.' }));
+        return;
+      }
       if (!hasPrices(variant)) {
         els.pricePanel.appendChild(badge('quote_required'));
         els.pricePanel.appendChild(h('p', { class: 'ls-price-hint', text: 'Esta configuración se presupuesta. Añádela al pedido y te indicaremos el precio.' }));
@@ -617,20 +672,29 @@
       variant.prices.forEach(function (p, i) {
         els.tiers.appendChild(h('li', { class: r && P.tiers[i] === r.tier ? 'is-current' : '' }, [
           h('span', { text: P.tiers[i] + (i === P.tiers.length - 1 ? '+ uds' : ' ud' + (P.tiers[i] === 1 ? '' : 's')) }),
-          h('strong', { text: moneyUI(p) })
+          h('strong', { text: p == null ? 'A presupuestar' : moneyUI(p) })
         ]));
       });
-      if (general) els.pricePanel.appendChild(badge(prod.status));
+      var volQuote = r && r.status === 'quote_required';
+      if (general) els.pricePanel.appendChild(badge(volQuote ? 'quote_required' : prod.status));
       if (!qtyOk) {
         els.pricePanel.appendChild(h('p', { class: 'ls-price-hint', text: 'Indica una cantidad válida para ver el precio de la línea.' }));
+        return;
+      }
+      if (r.status === 'quote_required') {
+        if (!general) els.pricePanel.appendChild(badge('quote_required'));
+        els.pricePanel.appendChild(h('p', { class: 'ls-price-hint', text: 'Para esta cantidad el precio se presupuesta. Añádela al pedido y te indicaremos el importe por WhatsApp.' }));
         return;
       }
       els.pricePanel.appendChild(h('p', { class: 'ls-price-main' }, [
         h('span', { text: estimated ? 'Precio unitario orientativo' : 'Precio unitario' }), h('strong', { text: moneyUI(r.unitCents) })
       ]));
-      if (r.extraLabel) els.pricePanel.appendChild(h('p', { class: 'ls-price-sub', text: 'Suplemento: +' + moneyUI(r.extraUnitCents) + ' por unidad' }));
+      if (r.extraLabel) {
+        var ex = findOption(prod.extras.options, cfg.values.extras);
+        els.pricePanel.appendChild(h('p', { class: 'ls-price-sub', text: 'Suplemento: ' + (r.extraUnitCents > 0 ? '+' + moneyUI(r.extraUnitCents) + ' por unidad' : '') + (r.extraFixedCents > 0 ? (r.extraUnitCents > 0 ? ' + ' : '+') + moneyUI(r.extraFixedCents) + ' (pago único)' : (ex && ex.fixed ? ' (digitalización ya contada en otra línea)' : '')) }));
+      }
       els.pricePanel.appendChild(h('p', { class: 'ls-price-sub' }, [estimated ? 'Subtotal orientativo de esta línea: ' : 'Subtotal de esta línea: ', h('strong', { text: moneyUI(r.lineCents) })]));
-      if (estimated) els.pricePanel.appendChild(h('p', { class: 'ls-price-sub', text: 'Precio orientativo: se confirmará antes de producir.' }));
+      if (estimated) els.pricePanel.appendChild(h('p', { class: 'ls-price-sub', text: prod.estimateNote || P.estimateNote }));
       if (r.volume) els.pricePanel.appendChild(h('p', { class: 'ls-volume', text: P.volumeNote }));
     }
     // Líneas del pedido + la que se está configurando (fusionando si ya existe igual).
@@ -664,11 +728,12 @@
         var fileOpt = findOption(prod.file.options, line.values.file);
         var meta, total;
         if (r.status === 'quote_required') {
-          meta = 'A presupuesto' + (line.values.detail ? ' · ' + line.values.detail : '') + (fileOpt ? ' · ' + fileOpt.label : '');
+          meta = (r.volumeQuote ? 'A presupuesto (pedido de volumen)' : 'A presupuesto') + (line.values.detail ? ' · ' + line.values.detail : '') + (fileOpt ? ' · ' + fileOpt.label : '');
           total = 'A presupuestar';
         } else {
           meta = (r.estimated ? 'Precio unitario orientativo ' : 'Precio unitario ') + moneyUI(r.unitCents) +
-            (r.extraLabel ? ' · ' + r.extraLabel + ' +' + moneyUI(r.extraUnitCents) + '/ud' : '') + (fileOpt ? ' · ' + fileOpt.label : '');
+            (r.extraLabel ? ' · ' + r.extraLabel + ' ' + extraPriceText(r.extraUnitCents, r.extraFixedCents) : '') +
+            (line.values.detail ? ' · ' + line.values.detail : '') + (fileOpt ? ' · ' + fileOpt.label : '');
           total = moneyUI(r.lineCents);
         }
         ul.appendChild(h('li', { class: 'ls-line' }, [
@@ -717,7 +782,7 @@
       row('Total estimado', totalText, 'is-total');
       els.volumeNote.hidden = !calc.volume;
       els.totalNotes.textContent = '';
-      if (calc.hasEstimated) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: 'Incluye precios orientativos: se confirmarán antes de producir.' }));
+      if (calc.hasEstimated) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: P.estimateTotalNote }));
       if (calc.hasQuote) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: 'Hay ' + calc.quoteCount + (calc.quoteCount === 1 ? ' línea' : ' líneas') + ' a presupuestar: no están incluidas en el total.' }));
       if (calc.shippingReview) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: 'El envío se revisará según el pedido final.' }));
       return calc;
@@ -728,7 +793,7 @@
     /* ----- Eventos: configuración ----- */
     function configIds() {
       var prod = curProd();
-      return prod ? prod.fields.map(function (f) { return f.id; }).concat(['file', 'qty']) : [];
+      return prod ? prod.fields.map(function (f) { return f.id; }).concat(['file', 'qty'].concat(prod.extras && prod.extras.required ? ['extras'] : [])) : [];
     }
     function clearConfigErrors() {
       configIds().forEach(function (id) { if (cur.ctl[id]) setError(cur.ctl[id], errElFor(id), ''); });
@@ -757,7 +822,9 @@
       }
       var cfg = readConfig();
       var first = null, bad = false;
-      prod.fields.concat([{ id: 'file', label: prod.file.label }]).forEach(function (f) {
+      var required = prod.fields.concat([{ id: 'file', label: prod.file.label }]);
+      if (prod.extras && prod.extras.required) required.push({ id: 'extras', label: prod.extras.label });
+      required.forEach(function (f) {
         if (!cfg.values[f.id]) {
           setError(cur.ctl[f.id], errElFor(f.id), 'Elige una opción en «' + f.label + '».');
           if (!first) first = cur.ctl[f.id];
