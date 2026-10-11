@@ -1,155 +1,385 @@
 /*
   Livan Studio · Tarifa web V1 (PROVISIONAL)
   ------------------------------------------------------------------
-  Fuente de verdad de precios del configurador "Prepara tu pedido".
-  Esta tarifa es provisional (estado: fixed_provisional).
+  Fuente de verdad de precios del configurador "Prepara tu pedido"
+  (páginas de camisetas, tazas y /pedidos.html).
+
+  ESTADOS DE PRECIO (campo `status` de cada producto)
+  - fixed_provisional : precio automático por tramos (tarifa provisional V1).
+  - estimated         : precio orientativo; se confirma antes de producir.
+  - quote_required    : a presupuesto, sin precio en la web.
+  Si un producto tiene `status` fixed_provisional o estimated pero sus
+  variantes tienen `prices: null`, la web lo trata como "a presupuestar"
+  hasta que se rellene la tarifa. No se muestra ningún precio inventado.
 
   CÓMO ACTUALIZAR PRECIOS
   1. Todos los importes están en CÉNTIMOS de euro (17,90 € = 1790).
   2. Cada variante tiene `prices`: un importe por tramo, en el mismo orden
-     que `tiers` (1, 5, 10, 25, 50, 100 unidades).
+     que `tiers` (1, 5, 10, 25, 50, 100 unidades). `prices: null` = pendiente.
   3. Los suplementos (`extras`) son importes por unidad, también en céntimos.
   4. Los envíos están en `shipping`: `byKind` por tipo de producto
      (textil / fragil). `mode: 'quote'` significa "a presupuestar".
-  5. IMPORTANTE: /assets/* se sirve con caché inmutable de un año. Tras editar
-     este archivo hay que cambiar el valor de `?v=` en el <script> de
-     pricing.js y order-builder.js en camisetas-personalizadas.html y
-     tazas-personalizadas.html (por ejemplo ?v=v1-2).
-  6. Sube también `version` para saber qué tarifa se está sirviendo.
+     En un pedido mixto se aplica el envío más alto de los tipos presentes.
+  5. Tramos (`tierScope: 'variant'`): se suman las cantidades de las líneas con
+     el mismo PRODUCTO y la misma VARIANTE DE PRECIO (`variantField`). Nunca se
+     mezclan productos distintos ni variantes distintas.
+  6. IMPORTANTE: /assets/* se sirve con caché inmutable de un año. Tras editar
+     este archivo hay que cambiar el valor de `?v=` en los <script> de
+     pricing.js y order-builder.js en camisetas-personalizadas.html,
+     tazas-personalizadas.html y pedidos.html (por ejemplo ?v=v2-2).
+  7. Sube también `version` para saber qué tarifa se está sirviendo.
 */
-window.LIVAN_PRICING = {
-  version: 'V1-provisional.2',
-  status: 'fixed_provisional',
-  currency: 'EUR',
-  priceNote: 'Precio con IVA incluido · Envío aparte',
-  reviewNote: 'El pedido se revisará antes de producir para confirmar archivo, disponibilidad y envío.',
-  volumeNote: 'Pedido de volumen: revisaremos precio final antes de producir.',
-  whatsappNumber: '34692899784',
+(function () {
+  'use strict';
 
-  // Tramos por cantidad. Se usa el tramo más cercano hacia abajo.
-  tiers: [1, 5, 10, 25, 50, 100],
-  // A partir de esta cantidad el pedido se marca "a revisar".
-  volumeFrom: 100,
-  maxQuantity: 1000,
-  // 'variant' -> el tramo suma las cantidades de todas las líneas con la misma
-  //              variante de precio (mismo producto, técnica y posición/tamaño;
-  //              la talla, el color y los extras no cambian la variante).
-  //              Decisión comercial vigente: 5 M + 2 L frontal A4 = 7 uds, tramo de 5.
-  // 'line'    -> el tramo depende solo de la cantidad de cada línea.
-  tierScope: 'variant',
+  // Opciones compartidas por varios productos textiles.
+  var SIZES = [
+    { value: 'S', label: 'S' }, { value: 'M', label: 'M' }, { value: 'L', label: 'L' },
+    { value: 'XL', label: 'XL' }, { value: 'XXL', label: 'XXL' }
+  ];
+  var COLORS = [
+    { value: 'blanco', label: 'Blanco' }, { value: 'negro', label: 'Negro' },
+    { value: 'otro', label: 'Otro / consultar' }
+  ];
+  var POSITIONS_3 = [
+    { value: 'pecho', label: 'Pecho pequeño ≤10×10 cm', msgLabel: 'Pecho ≤10×10' },
+    { value: 'frontal', label: 'Frontal ≤A4', msgLabel: 'Frontal ≤A4' },
+    { value: 'grande', label: 'Grande ≤A3', msgLabel: 'Grande ≤A3' }
+  ];
+  var POSITIONS_2 = POSITIONS_3.slice(0, 2);
+  var FILE_GENERIC = [
+    { value: 'listo', label: 'Tengo archivo listo', msgText: 'Tengo archivo listo y lo enviaré por WhatsApp.' },
+    { value: 'logo-ayuda', label: 'Tengo logo pero necesito ayuda', msgText: 'Tengo un logo pero necesito ayuda para prepararlo; lo enviaré por WhatsApp.' },
+    { value: 'idea', label: 'Solo tengo una idea', msgText: 'Solo tengo una idea y necesito orientación con el diseño.' },
+    { value: 'repetir', label: 'Quiero repetir un diseño anterior', msgText: 'Quiero repetir un diseño anterior.' }
+  ];
+  var FILE_MUG = [
+    { value: 'foto', label: 'Foto', msgText: 'Quiero personalizarla con una foto y la enviaré por WhatsApp.' },
+    { value: 'texto', label: 'Texto', msgText: 'Quiero personalizarla con un texto; lo indicaré por WhatsApp.' },
+    { value: 'logo', label: 'Logo', msgText: 'Quiero personalizarla con un logo y lo enviaré por WhatsApp.' },
+    { value: 'idea', label: 'Tengo una idea', msgText: 'Solo tengo una idea y necesito orientación con el diseño.' },
+    { value: 'repetir', label: 'Repetir diseño anterior', msgText: 'Quiero repetir un diseño anterior.' }
+  ];
+  // Suplementos por unidad de la tarifa V1 (céntimos).
+  var EXTRAS_NAMES = [
+    { value: 'ninguno', label: 'Ninguno', perUnit: 0 },
+    { value: 'nombre', label: 'Nombre individual DTF', perUnit: 290 },
+    { value: 'dorsal', label: 'Dorsal individual', perUnit: 390 },
+    { value: 'nombre-dorsal', label: 'Nombre + dorsal', perUnit: 590 }
+  ];
+  function pending(label) { return { label: label, prices: null }; }
 
-  shipping: {
-    recogida: { label: 'Recogida en Rubí', mode: 'fixed', byKind: { textil: 0, fragil: 0 }, needsAddress: false },
-    peninsula: { label: 'Envío a domicilio · España peninsular', mode: 'from', byKind: { textil: 790, fragil: 990 }, needsAddress: true },
-    islas: { label: 'Baleares / Canarias / Ceuta / Melilla', mode: 'quote', needsAddress: true },
-    consultar: { label: 'Envío a consultar', mode: 'quote', needsAddress: false }
-  },
+  window.LIVAN_PRICING = {
+    version: 'V1-provisional.3',
+    status: 'fixed_provisional',
+    currency: 'EUR',
+    priceNote: 'Precio con IVA incluido · Envío aparte',
+    reviewNote: 'El pedido se revisará antes de producir para confirmar archivo, disponibilidad y envío.',
+    volumeNote: 'Pedido de volumen: revisaremos precio final antes de producir.',
+    whatsappNumber: '34692899784',
 
-  payments: [
-    { value: 'bizum', label: 'Bizum' },
-    { value: 'transferencia', label: 'Transferencia' },
-    { value: 'paypal', label: 'PayPal' },
-    { value: 'enlace', label: 'Enlace de pago' }
-  ],
+    // Tramos por cantidad. Se usa el tramo más cercano hacia abajo.
+    tiers: [1, 5, 10, 25, 50, 100],
+    // A partir de esta cantidad el pedido se marca "a revisar".
+    volumeFrom: 100,
+    maxQuantity: 1000,
+    // 'variant' -> el tramo suma las cantidades de todas las líneas con el mismo
+    //              producto y la misma variante de precio (`variantField`); la
+    //              talla, el color y los extras no cambian la variante.
+    //              Decisión comercial vigente: 5 M + 2 L frontal A4 = 7 uds, tramo de 5.
+    // 'line'    -> el tramo depende solo de la cantidad de cada línea.
+    tierScope: 'variant',
 
-  products: {
-    camisetas: {
-      label: 'Camisetas personalizadas',
-      itemSingular: 'camiseta',
-      itemPlural: 'camisetas',
-      shippingKind: 'textil',
-      variantField: 'position',
-      // Orden de los datos en el texto de cada línea del mensaje de WhatsApp.
-      lineOrder: ['size', 'color', 'technique', 'position'],
-      fields: [
-        { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'adulto', label: 'Camiseta adulto' }] },
-        { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
-        {
-          id: 'position', label: 'Posición y tamaño del diseño',
-          options: [
-            { value: 'pecho', label: 'Pecho pequeño ≤10×10 cm', msgLabel: 'Pecho ≤10×10' },
-            { value: 'frontal', label: 'Frontal ≤A4', msgLabel: 'Frontal ≤A4' },
-            { value: 'grande', label: 'Grande ≤A3', msgLabel: 'Grande ≤A3' }
-          ]
-        },
-        {
-          id: 'size', label: 'Talla', msgPrefix: 'Talla ',
-          options: [
-            { value: 'S', label: 'S' }, { value: 'M', label: 'M' }, { value: 'L', label: 'L' },
-            { value: 'XL', label: 'XL' }, { value: 'XXL', label: 'XXL' }
-          ]
-        },
-        {
-          id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true,
-          options: [
-            { value: 'blanco', label: 'Blanco' }, { value: 'negro', label: 'Negro' },
-            { value: 'otro', label: 'Otro / consultar' }
-          ]
-        }
-      ],
-      variants: {
-        pecho: { label: 'Camiseta adulto · DTF pecho ≤10×10', prices: [1790, 1590, 1390, 1190, 1090, 990] },
-        frontal: { label: 'Camiseta adulto · DTF frontal ≤A4', prices: [2190, 1990, 1690, 1490, 1390, 1290] },
-        grande: { label: 'Camiseta adulto · DTF grande ≤A3', prices: [2390, 2190, 1890, 1690, 1590, 1490] }
-      },
-      // Suplementos por unidad, en céntimos.
-      extras: {
-        label: 'Extras',
-        options: [
-          { value: 'ninguno', label: 'Ninguno', perUnit: 0 },
-          { value: 'zona2-pequena', label: 'Segunda zona DTF pequeña', perUnit: 350 },
-          { value: 'zona2-a4', label: 'Segunda zona DTF hasta A4', perUnit: 550 },
-          { value: 'zona2-a3', label: 'Segunda zona DTF hasta A3', perUnit: 750 },
-          { value: 'nombre', label: 'Nombre individual DTF', perUnit: 290 },
-          { value: 'dorsal', label: 'Dorsal individual', perUnit: 390 },
-          { value: 'nombre-dorsal', label: 'Nombre + dorsal', perUnit: 590 },
-          { value: 'manga', label: 'Manga pequeña / logo adicional', perUnit: 350 }
-        ]
-      },
-      file: {
-        label: 'Archivo / diseño',
-        options: [
-          { value: 'listo', label: 'Tengo archivo listo', msgText: 'Tengo archivo listo y lo enviaré por WhatsApp.' },
-          { value: 'logo-ayuda', label: 'Tengo logo pero necesito ayuda', msgText: 'Tengo un logo pero necesito ayuda para prepararlo; lo enviaré por WhatsApp.' },
-          { value: 'idea', label: 'Solo tengo una idea', msgText: 'Solo tengo una idea y necesito orientación con el diseño.' },
-          { value: 'repetir', label: 'Quiero repetir un diseño anterior', msgText: 'Quiero repetir un diseño anterior.' }
-        ]
-      }
+    shipping: {
+      recogida: { label: 'Recogida en Rubí', mode: 'fixed', byKind: { textil: 0, fragil: 0 }, needsAddress: false },
+      peninsula: { label: 'Envío a domicilio · España peninsular', mode: 'from', byKind: { textil: 790, fragil: 990 }, needsAddress: true },
+      islas: { label: 'Baleares / Canarias / Ceuta / Melilla', mode: 'quote', needsAddress: true },
+      consultar: { label: 'Envío a consultar', mode: 'quote', needsAddress: false }
     },
 
-    tazas: {
-      label: 'Tazas personalizadas',
-      itemSingular: 'taza',
-      itemPlural: 'tazas',
-      shippingKind: 'fragil',
-      variantField: 'type',
-      fields: [
-        { id: 'type', label: 'Tipo', options: [{ value: 'blanca-325', label: 'Taza blanca 325 ml' }] },
-        { id: 'technique', label: 'Técnica', options: [{ value: 'sublimacion', label: 'Sublimación' }] },
-        {
-          // Sin suplemento por una cara / dos caras / envolvente mientras encaje en el área imprimible.
-          id: 'design', label: 'Diseño',
+    payments: [
+      { value: 'bizum', label: 'Bizum' },
+      { value: 'transferencia', label: 'Transferencia' },
+      { value: 'paypal', label: 'PayPal' },
+      { value: 'enlace', label: 'Enlace de pago' }
+    ],
+
+    // Textos de los estados de precio (UI).
+    statusLabels: {
+      fixed_provisional: 'Precio automático',
+      estimated: 'Precio orientativo',
+      quote_required: 'A presupuesto'
+    },
+
+    // El orden de las claves es el orden del catálogo (selector, resumen y mensaje).
+    products: {
+      /* ================= MVP 1: precio automático (tarifa V1) ================= */
+      camisetas: {
+        label: 'Camisetas personalizadas',
+        status: 'fixed_provisional',
+        itemSingular: 'camiseta',
+        itemPlural: 'camisetas',
+        shippingKind: 'textil',
+        variantField: 'position',
+        // Orden de los datos en el texto de cada línea del mensaje de WhatsApp.
+        lineOrder: ['size', 'color', 'technique', 'position'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'adulto', label: 'Camiseta adulto' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_3 },
+          { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        variants: {
+          pecho: { label: 'Camiseta adulto · DTF pecho ≤10×10', prices: [1790, 1590, 1390, 1190, 1090, 990] },
+          frontal: { label: 'Camiseta adulto · DTF frontal ≤A4', prices: [2190, 1990, 1690, 1490, 1390, 1290] },
+          grande: { label: 'Camiseta adulto · DTF grande ≤A3', prices: [2390, 2190, 1890, 1690, 1590, 1490] }
+        },
+        // Suplementos por unidad, en céntimos.
+        extras: {
+          label: 'Extras',
           options: [
-            { value: 'una-cara', label: 'Una cara', msgLabel: 'Una cara' },
-            { value: 'dos-caras', label: 'Dos caras', msgLabel: 'Dos caras' },
-            { value: 'envolvente', label: 'Envolvente', msgLabel: 'Envolvente' }
+            { value: 'ninguno', label: 'Ninguno', perUnit: 0 },
+            { value: 'zona2-pequena', label: 'Segunda zona DTF pequeña', perUnit: 350 },
+            { value: 'zona2-a4', label: 'Segunda zona DTF hasta A4', perUnit: 550 },
+            { value: 'zona2-a3', label: 'Segunda zona DTF hasta A3', perUnit: 750 },
+            { value: 'nombre', label: 'Nombre individual DTF', perUnit: 290 },
+            { value: 'dorsal', label: 'Dorsal individual', perUnit: 390 },
+            { value: 'nombre-dorsal', label: 'Nombre + dorsal', perUnit: 590 },
+            { value: 'manga', label: 'Manga pequeña / logo adicional', perUnit: 350 }
           ]
-        }
-      ],
-      variants: {
-        'blanca-325': { label: 'Taza blanca 325 ml · sublimación', prices: [1290, 1090, 890, 790, 690, 590] }
+        },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
-      extras: null,
-      file: {
-        label: 'Archivo / diseño',
-        options: [
-          { value: 'foto', label: 'Foto', msgText: 'Quiero personalizarla con una foto y la enviaré por WhatsApp.' },
-          { value: 'texto', label: 'Texto', msgText: 'Quiero personalizarla con un texto; lo indicaré por WhatsApp.' },
-          { value: 'logo', label: 'Logo', msgText: 'Quiero personalizarla con un logo y lo enviaré por WhatsApp.' },
-          { value: 'idea', label: 'Tengo una idea', msgText: 'Solo tengo una idea y necesito orientación con el diseño.' },
-          { value: 'repetir', label: 'Repetir diseño anterior', msgText: 'Quiero repetir un diseño anterior.' }
-        ]
+
+      tazas: {
+        label: 'Tazas personalizadas',
+        status: 'fixed_provisional',
+        itemSingular: 'taza',
+        itemPlural: 'tazas',
+        shippingKind: 'fragil',
+        variantField: 'type',
+        fields: [
+          { id: 'type', label: 'Tipo', options: [{ value: 'blanca-325', label: 'Taza blanca 325 ml' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'sublimacion', label: 'Sublimación' }] },
+          {
+            // Sin suplemento por una cara / dos caras / envolvente mientras encaje en el área imprimible.
+            id: 'design', label: 'Diseño',
+            options: [
+              { value: 'una-cara', label: 'Una cara', msgLabel: 'Una cara' },
+              { value: 'dos-caras', label: 'Dos caras', msgLabel: 'Dos caras' },
+              { value: 'envolvente', label: 'Envolvente', msgLabel: 'Envolvente' }
+            ]
+          }
+        ],
+        variants: {
+          'blanca-325': { label: 'Taza blanca 325 ml · sublimación', prices: [1290, 1090, 890, 790, 690, 590] }
+        },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_MUG }
+      },
+
+      /* ===== MVP 2: precio automático, TARIFA PENDIENTE (prices: null => a presupuestar) ===== */
+      'tote-bags': {
+        label: 'Tote bags personalizadas',
+        status: 'fixed_provisional',
+        itemSingular: 'tote bag',
+        itemPlural: 'tote bags',
+        shippingKind: 'textil',
+        variantField: 'position',
+        lineOrder: ['color', 'technique', 'position'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'tote', label: 'Tote bag de tela' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Tamaño del diseño', options: POSITIONS_3 },
+          {
+            id: 'color', label: 'Color de la bolsa', msgPrefix: 'Color ', msgLower: true,
+            options: [{ value: 'natural', label: 'Natural' }, { value: 'negro', label: 'Negro' }, { value: 'otro', label: 'Otro / consultar' }]
+          }
+        ],
+        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
+        variants: { pecho: pending('Tote bag · DTF ≤10×10'), frontal: pending('Tote bag · DTF ≤A4'), grande: pending('Tote bag · DTF ≤A3') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      polos: {
+        label: 'Polos personalizados',
+        status: 'fixed_provisional',
+        itemSingular: 'polo',
+        itemPlural: 'polos',
+        shippingKind: 'textil',
+        variantField: 'position',
+        lineOrder: ['size', 'color', 'technique', 'position'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'adulto', label: 'Polo adulto' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_2 },
+          { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
+        variants: { pecho: pending('Polo adulto · DTF pecho ≤10×10'), frontal: pending('Polo adulto · DTF frontal ≤A4') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      sudaderas: {
+        label: 'Sudaderas personalizadas',
+        status: 'fixed_provisional',
+        itemSingular: 'sudadera',
+        itemPlural: 'sudaderas',
+        shippingKind: 'textil',
+        variantField: 'position',
+        lineOrder: ['type', 'size', 'color', 'technique', 'position'],
+        fields: [
+          {
+            // Si el precio depende del tipo, hay que convertir la variante en clave compuesta.
+            id: 'type', label: 'Tipo',
+            options: [{ value: 'capucha', label: 'Sudadera con capucha' }, { value: 'redonda', label: 'Sudadera cuello redondo' }]
+          },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_3 },
+          { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        // TODO tarifa: rellenar `prices` (6 tramos, céntimos) cuando se confirme.
+        variants: { pecho: pending('Sudadera · DTF pecho ≤10×10'), frontal: pending('Sudadera · DTF frontal ≤A4'), grande: pending('Sudadera · DTF grande ≤A3') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      /* ===== MVP 2: precio orientativo, TARIFA PENDIENTE (prices: null => a presupuestar) ===== */
+      'gorras-dtf': {
+        label: 'Gorras personalizadas (DTF)',
+        status: 'estimated',
+        itemSingular: 'gorra',
+        itemPlural: 'gorras',
+        shippingKind: 'textil',
+        variantField: 'technique',
+        lineOrder: ['color', 'technique'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'gorra', label: 'Gorra' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
+        variants: { dtf: pending('Gorra · DTF') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      'gorras-bordado': {
+        label: 'Gorras bordadas',
+        status: 'estimated',
+        itemSingular: 'gorra',
+        itemPlural: 'gorras',
+        shippingKind: 'textil',
+        variantField: 'technique',
+        lineOrder: ['color', 'technique'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'gorra', label: 'Gorra' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'bordado', label: 'Bordado (logo frontal estándar)', msgLabel: 'Bordado' }] },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        // Los bordados grandes se piden como "Bordados grandes" (a presupuesto).
+        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
+        variants: { bordado: pending('Gorra · bordado') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      termos: {
+        label: 'Termos personalizados',
+        status: 'estimated',
+        itemSingular: 'termo',
+        itemPlural: 'termos',
+        shippingKind: 'fragil',
+        variantField: 'type',
+        fields: [
+          { id: 'type', label: 'Tipo', options: [{ value: 'sublimable', label: 'Termo sublimable' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'sublimacion', label: 'Sublimación' }] },
+          {
+            id: 'design', label: 'Diseño',
+            options: [
+              { value: 'una-cara', label: 'Una cara', msgLabel: 'Una cara' },
+              { value: 'envolvente', label: 'Envolvente', msgLabel: 'Envolvente' }
+            ]
+          }
+        ],
+        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
+        variants: { sublimable: pending('Termo sublimable · sublimación') },
+        extras: null,
+        file: { label: 'Archivo / diseño', options: FILE_MUG }
+      },
+
+      'equipaciones-dtf': {
+        label: 'Equipaciones personalizadas (DTF)',
+        status: 'estimated',
+        itemSingular: 'equipación',
+        itemPlural: 'equipaciones',
+        shippingKind: 'textil',
+        variantField: 'position',
+        lineOrder: ['size', 'color', 'technique', 'position'],
+        fields: [
+          { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'equipacion', label: 'Camiseta de equipación' }] },
+          { id: 'technique', label: 'Técnica', options: [{ value: 'dtf', label: 'DTF' }] },
+          { id: 'position', label: 'Posición y tamaño del diseño', options: POSITIONS_3 },
+          { id: 'size', label: 'Talla', msgPrefix: 'Talla ', options: SIZES },
+          { id: 'color', label: 'Color', msgPrefix: 'Color ', msgLower: true, options: COLORS }
+        ],
+        // TODO tarifa: rellenar `prices` orientativos (6 tramos, céntimos).
+        variants: { pecho: pending('Equipación · DTF ≤10×10'), frontal: pending('Equipación · DTF ≤A4'), grande: pending('Equipación · DTF ≤A3') },
+        // Mismos suplementos por unidad que camisetas (tarifa V1): nombre, dorsal, nombre + dorsal.
+        extras: { label: 'Extras', options: EXTRAS_NAMES },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+
+      /* ===== MVP 2: a presupuesto (sin precio en la web) ===== */
+      'uniformes-complejos': {
+        label: 'Uniformes complejos',
+        status: 'quote_required',
+        shippingKind: 'textil',
+        variantField: null,
+        fields: [],
+        variants: null,
+        extras: null,
+        detail: { label: 'Cuéntanos qué necesitas', placeholder: 'Prendas, logotipos, personalización por persona, fecha…' },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+      'equipaciones-sublimadas': {
+        label: 'Equipaciones sublimadas integrales',
+        status: 'quote_required',
+        shippingKind: 'textil',
+        variantField: null,
+        fields: [],
+        variants: null,
+        extras: null,
+        detail: { label: 'Cuéntanos qué necesitas', placeholder: 'Deporte, nº de jugadores, diseño integral, tallas…' },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+      'bordados-grandes': {
+        label: 'Bordados grandes',
+        status: 'quote_required',
+        shippingKind: 'textil',
+        variantField: null,
+        fields: [],
+        variants: null,
+        extras: null,
+        detail: { label: 'Cuéntanos qué necesitas', placeholder: 'Prenda, tamaño aproximado del bordado, logotipo…' },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
+      },
+      'disenos-complejos': {
+        label: 'Diseños complejos',
+        status: 'quote_required',
+        shippingKind: 'textil',
+        variantField: null,
+        fields: [],
+        variants: null,
+        extras: null,
+        detail: { label: 'Cuéntanos qué necesitas', placeholder: 'Producto, tipo de diseño, nº de diseños distintos…' },
+        file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       }
     }
-  }
-};
+  };
+})();
