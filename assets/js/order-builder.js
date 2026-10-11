@@ -177,6 +177,14 @@
     // Si no hay ninguna línea con precio, el envío a domicilio no se puede estimar.
     if (sh.mode === 'from' && lines.length && out.pricedCount === 0) { out.shippingQuote = true; out.shippingCents = 0; }
     out.shippingReview = out.hasQuote;
+    // Gorras bordadas: varios logos o textos distintos (campo `detail`) => revisión manual.
+    var logos = {};
+    lines.forEach(function (l, i) {
+      if (!meta[i].prod.multiLogoReview || meta[i].status === 'quote_required') return;
+      var d = oneLine(l.values.detail, 300).toLowerCase();
+      if (d) (logos[l.product] = logos[l.product] || {})[d] = true;
+    });
+    out.multiLogo = Object.keys(logos).some(function (k) { return Object.keys(logos[k]).length > 1; });
     out.totalCents = out.productsCents + out.shippingCents;
     return out;
   }
@@ -330,6 +338,7 @@
         }
       });
     }
+    if (calc.multiLogo) L.push(P.multiLogoNote);
     if (calc.hasQuote) L.push('Líneas a presupuestar: ' + calc.quoteCount + ' (sin precio en el total).');
     if (calc.shippingReview) L.push('El envío se revisará según el pedido final.');
     if (calc.volume) L.push(P.volumeNote);
@@ -783,6 +792,7 @@
       els.volumeNote.hidden = !calc.volume;
       els.totalNotes.textContent = '';
       if (calc.hasEstimated) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: P.estimateTotalNote }));
+      if (calc.multiLogo) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: P.multiLogoNote }));
       if (calc.hasQuote) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: 'Hay ' + calc.quoteCount + (calc.quoteCount === 1 ? ' línea' : ' líneas') + ' a presupuestar: no están incluidas en el total.' }));
       if (calc.shippingReview) els.totalNotes.appendChild(h('p', { class: 'ls-note', text: 'El envío se revisará según el pedido final.' }));
       return calc;

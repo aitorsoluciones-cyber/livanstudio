@@ -75,7 +75,7 @@
   var CAP_DTF_PRICES = [1590, 1390, 1190, 1090, 990, 890];
 
   window.LIVAN_PRICING = {
-    version: 'V1-provisional.4',
+    version: 'V1-provisional.5',
     status: 'fixed_provisional',
     currency: 'EUR',
     priceNote: 'Precio con IVA incluido · Envío aparte',
@@ -83,6 +83,7 @@
     volumeNote: 'Pedido de volumen: revisaremos precio final antes de producir.',
     // Aviso de los productos con precio orientativo (estimated).
     estimateNote: 'Precio orientativo. Te confirmaremos el importe final tras revisar producto, archivo, cantidad y disponibilidad.',
+    multiLogoNote: 'Hay varios logos o textos distintos en gorras bordadas: el precio queda sujeto a revisión manual (la digitalización se confirma por logo).',
     estimateTotalNote: 'El total incluye precios orientativos. Te confirmaremos el importe final tras revisar producto, archivo, cantidad y disponibilidad.',
     whatsappNumber: '34692899784',
 
@@ -320,8 +321,10 @@
         shippingKind: 'textil',
         variantField: 'technique',
         lineOrder: ['type', 'color', 'technique'],
+        // Si hay varios logos o textos distintos (campo `detail`), el pedido queda sujeto a revisión manual.
+        multiLogoReview: true,
         estimateNote: 'Precio orientativo de bordado: revisaremos el modelo de gorra, el logo y las puntadas antes de producir.',
-        info: 'Precio orientativo: incluye la gorra y el bordado de un logo o texto pequeño. La digitalización del logo (30,00 €, pago único) solo se cobra la primera vez. Para logos grandes o complejos usa «Bordados grandes» (a presupuesto).',
+        info: 'Precio orientativo: incluye la gorra y el bordado de un logo o texto pequeño. La digitalización del logo (30,00 €, pago único) solo se cobra la primera vez. Si pides varios logos distintos, el precio queda sujeto a revisión manual. Para logos grandes o complejos usa «Bordados grandes» (a presupuesto).',
         fields: [
           { id: 'type', label: 'Tipo', msg: false, options: [{ value: 'gorra', label: 'Gorra' }] },
           { id: 'technique', label: 'Técnica', options: [{ value: 'bordado', label: 'Bordado' }] },
@@ -338,6 +341,7 @@
             { value: 'nombre-texto', label: 'Nombre / texto pequeño', perUnit: EMBROIDERY.nameSmall, fixed: 0 }
           ]
         },
+        detail: { label: 'Logo o texto a bordar', placeholder: 'Por ejemplo: logo del club o el texto «Bar Pepe». Si son varios logos, ponlos en líneas distintas.' },
         file: { label: 'Archivo / diseño', options: FILE_GENERIC }
       },
 
