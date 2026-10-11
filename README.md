@@ -18,7 +18,7 @@ Versión estática optimizada para captar pedidos, presupuestos y conversaciones
 2. Revisar las políticas legales con los datos y operativa reales.
 3. Configurar en Netlify la notificación de formularios a `info@livanstudio.com`.
 4. Crear un Deploy Preview y enviar un formulario real con archivo adjunto.
-5. Confirmar DNS y SSL de `livanstudio.com` y `livanpersonalizados.com`.
+5. Confirmar DNS y SSL de `livanstudio.com`.
 6. Sustituir o ampliar los mockups con fotografías reales autorizadas cuando estén disponibles.
 
 ## Publicación recomendada

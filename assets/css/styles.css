@@ -295,3 +295,32 @@ section[id]{scroll-margin-top:90px}
   .ls-total-row.is-total dd{font-size:1.4rem}
 }
 @media(prefers-reduced-motion:reduce){.ls-order *{transition:none!important}}
+
+/* ===== MVP 2 · Pedido general (/pedidos.html) ===== */
+.ls-combine{margin:12px 0 0}
+.ls-combine a{font-weight:800;color:inherit;text-decoration:none;border-bottom:2px solid var(--red);padding-bottom:2px}
+.ls-combine a:hover{color:var(--red)}
+.ls-pick-cta{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;margin:26px 0 0}
+.ls-pick-cta span{color:var(--gray-600)}
+
+.ls-group-title{font-size:1rem;line-height:1.3;margin:18px 0 8px;font-weight:800;letter-spacing:0}
+.ls-lines-wrap>.ls-group-title:first-child{margin-top:0}
+.ls-badge{display:inline-block;margin:0 0 8px;padding:4px 12px;border-radius:999px;font-size:.78rem;font-weight:800;letter-spacing:.02em}
+.ls-badge-fixed_provisional{background:#151515;color:#fff}
+.ls-badge-estimated{background:#fff4e5;color:#6b3d00;border:1px solid #f0cf9c}
+.ls-badge-quote_required{background:#eef0f4;color:#2b3140;border:1px solid #c9ced8}
+.ls-total-notes .ls-note{margin:8px 0 0}
+.ls-check{margin:0}
+.ls-check input{margin:0}
+
+.ls-clarify{background:#fff}
+.ls-clarify h2{margin-bottom:6px}
+.ls-clarify-list{list-style:none;margin:20px 0;padding:0;display:grid;gap:12px}
+.ls-clarify-list li{position:relative;padding:14px 16px 14px 46px;border:1px solid #e3e3e3;border-radius:14px;background:var(--gray-50)}
+.ls-clarify-list li::before{content:"✓";position:absolute;left:14px;top:13px;width:22px;height:22px;border-radius:50%;background:var(--red);color:#fff;font-size:.8rem;font-weight:900;display:grid;place-items:center}
+.ls-clarify .ls-note a{color:inherit;font-weight:700}
+
+@media(max-width:720px){
+  .ls-clarify-list li{padding:12px 14px 12px 42px}
+}
+.ls-product-field{margin-bottom:16px}
